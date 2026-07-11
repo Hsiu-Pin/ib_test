@@ -2,7 +2,7 @@ from datetime import time
 from backtesting import Strategy
 
 
-class OpeningRangeBreakoutC1(Strategy):
+class OpeningRangeBreakout(Strategy):
     """
     Long-only Opening Range Breakout.
 

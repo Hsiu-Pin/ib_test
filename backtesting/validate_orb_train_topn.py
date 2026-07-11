@@ -8,7 +8,7 @@ from backtesting import Backtest
 
 # Reuse the loader / cost / ranking utilities from the optimizer.
 # Keep optimize_orb_ib_range_v2.py in the same project folder.
-from optimize_orb_ib_range_v2 import (
+from my_optimize_orb import (
     stg,
     load_ib_csv_range_data,
     select_commission,
@@ -20,7 +20,7 @@ from optimize_orb_ib_range_v2 import (
 
 
 DEFAULT_SYMBOL = "TSLA"
-DEFAULT_IB_DATA_DIR = "./ib_data"
+DEFAULT_IB_DATA_DIR = "./ib_data_tsla"
 DEFAULT_SEC_TYPE = "STK"
 DEFAULT_CASH = 10000
 DEFAULT_COMMISSION_MODEL = "ibkr_fixed"

@@ -17,27 +17,27 @@ set TOP_N=20
 echo ============================================================
 echo 1. Train optimization: 2025 broad search
 echo ============================================================
-python optimize_orb_ib_range_v2.py --symbol %SYMBOL% \
---start-year 2025 --start-month 1 \
---end-year 2025 --end-month 12 \
---ib-data-dir %IB_DATA_DIR% \
---cash %CASH% \
---commission-model %COMMISSION_MODEL% \
---spread %SPREAD% \
---range-end-times 945,950,1000 \
---sl-start-pct 1.0 \
---sl-end-pct 3.5 \
---sl-step-pct 0.25 \
---tp-start-pct 2.0 \
---tp-end-pct 4.0 \
---tp-step-pct 0.25 \
---sort-by rank_metric \
---top-n %TOP_N% \
+python my_optimize_orb.py --symbol %SYMBOL% ^
+--start-year 2025 --start-month 1 ^
+--end-year 2025 --end-month 12 ^
+--ib-data-dir %IB_DATA_DIR% ^
+--cash %CASH% ^
+--commission-model %COMMISSION_MODEL% ^
+--spread %SPREAD% ^
+--range-end-times 945,950,1000 ^
+--sl-start-pct 1.0 ^
+--sl-end-pct 3.5 ^
+--sl-step-pct 0.25 ^
+--tp-start-pct 2.0 ^
+--tp-end-pct 4.0 ^
+--tp-step-pct 0.25 ^
+--sort-by rank_metric ^
+--top-n %TOP_N% ^
 --output-tag broad_train_2025
 
 if errorlevel 1 goto error
 
-set TRAIN_TOP_CSV=./result/orb_optimization_top%TOP_N%_%SYMBOL%_2025_01_to_2025_12_5m_orb_ib_range_v2_broad_train_2025.csv
+set TRAIN_TOP_CSV=./result/orb_optimization_top%TOP_N%_%SYMBOL%_2025_01_to_2025_12_5m_orb_ib_range_v3_broad_train_2025.csv
 
 echo.
 echo Train top CSV:
