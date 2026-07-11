@@ -7,7 +7,7 @@ import pandas as pd
 from backtesting import Backtest
 
 # Reuse the loader / cost / ranking utilities from the optimizer.
-# Keep optimize_orb_ib_range_v2.py in the same project folder.
+# Keep my_optimize_orb.py in the same project folder.
 from my_optimize_orb import (
     stg,
     load_ib_csv_range_data,
@@ -36,16 +36,21 @@ def parse_bool_value(value, default=False):
         return default
     if isinstance(value, bool):
         return value
+
     text = str(value).strip().lower()
+
     if text in ("1", "true", "t", "yes", "y"):
         return True
+
     if text in ("0", "false", "f", "no", "n"):
         return False
+
     return default
 
 
 def require_columns(df: pd.DataFrame, columns: List[str], path: Path):
     missing = [col for col in columns if col not in df.columns]
+
     if missing:
         raise ValueError(
             f"train top CSV 缺少必要欄位: {missing}\n"
@@ -64,10 +69,12 @@ def candidate_key(row) -> Tuple[float, float, int]:
 
 def load_train_candidates(path: str, top_n: int, dedupe: bool = True) -> pd.DataFrame:
     csv_path = Path(path)
+
     if not csv_path.exists():
         raise FileNotFoundError(f"找不到 train top CSV: {csv_path}")
 
     df = pd.read_csv(csv_path)
+
     require_columns(
         df,
         ["stop_loss_pct", "take_profit_pct", "range_end_hhmm"],
@@ -87,15 +94,35 @@ def load_train_candidates(path: str, top_n: int, dedupe: bool = True) -> pd.Data
     if dedupe:
         seen = set()
         keep_indices = []
+
         for idx, row in df.iterrows():
             key = candidate_key(row)
+
             if key in seen:
                 continue
+
             seen.add(key)
             keep_indices.append(idx)
+
         df = df.loc[keep_indices].reset_index(drop=True)
 
     return df
+
+
+def fmt_num(value, digits=2):
+    if value is None:
+        return "NA"
+
+    try:
+        if pd.isna(value):
+            return "NA"
+    except Exception:
+        pass
+
+    try:
+        return f"{float(value):.{digits}f}"
+    except Exception:
+        return str(value)
 
 
 def run_one_validation(bt: Backtest, row, args):
@@ -108,22 +135,15 @@ def run_one_validation(bt: Backtest, row, args):
     else:
         exit_hhmm = int(args.exit_hhmm)
 
-    #if args.force_allow_short is not None:
-    #    allow_short = args.force_allow_short
-    #elif "allow_short" in row:
-    #    allow_short = parse_bool_value(row["allow_short"], default=False)
-    #else:
-    #    allow_short = False
-
     stats = bt.run(
         stop_loss_pct=stop_loss_pct,
         take_profit_pct=take_profit_pct,
         range_end_hhmm=range_end_hhmm,
         exit_hhmm=exit_hhmm,
-        #allow_short=allow_short,
     )
 
     trades = stats["_trades"]
+
     if trades.empty:
         overnight_count = 0
     else:
@@ -134,24 +154,39 @@ def run_one_validation(bt: Backtest, row, args):
     val_rank_metric = calc_rank_metric(stats, args.dd_weight, args.pf_weight)
 
     train_return = safe_float(row.get("Return [%]"), default=None)
+    train_buy_hold = safe_float(row.get("Buy & Hold Return [%]"), default=None)
+    train_strategy_minus_buyhold = safe_float(row.get("Strategy - BuyHold [%]"), default=None)
+
     val_return = safe_float(stats.get("Return [%]"), default=None)
+    val_buy_hold = safe_float(stats.get("Buy & Hold Return [%]"), default=None)
 
     if train_return is None or val_return is None:
         return_gap = None
     else:
         return_gap = val_return - train_return
 
+    if val_return is None or val_buy_hold is None:
+        val_strategy_minus_buyhold = None
+    else:
+        val_strategy_minus_buyhold = val_return - val_buy_hold
+
     out = {
         "train_source_rank": int(row.get("train_source_rank", 0)),
         "train_rank_metric": safe_float(row.get("rank_metric"), default=None),
+
         "train_Return [%]": train_return,
+        "train_Buy & Hold Return [%]": train_buy_hold,
+        "train_Strategy - BuyHold [%]": train_strategy_minus_buyhold,
         "train_Max. Drawdown [%]": safe_float(row.get("Max. Drawdown [%]"), default=None),
-        "train_Profit Factor": safe_float(row.get("Profit Factor"), default=None),
         "train_# Trades": safe_float(row.get("# Trades"), default=None),
+        "train_Win Rate [%]": safe_float(row.get("Win Rate [%]"), default=None),
+        "train_Profit Factor": safe_float(row.get("Profit Factor"), default=None),
+        "train_Commissions [$]": safe_float(row.get("Commissions [$]"), default=None),
 
         "val_rank_metric": val_rank_metric,
         "val_Return [%]": val_return,
-        "val_Buy & Hold Return [%]": safe_float(stats.get("Buy & Hold Return [%]"), default=None),
+        "val_Buy & Hold Return [%]": val_buy_hold,
+        "val_Strategy - BuyHold [%]": val_strategy_minus_buyhold,
         "val_Equity Final [$]": safe_float(stats.get("Equity Final [$]"), default=None),
         "val_Max. Drawdown [%]": safe_float(stats.get("Max. Drawdown [%]"), default=None),
         "val_# Trades": safe_float(stats.get("# Trades"), default=None),
@@ -162,6 +197,7 @@ def run_one_validation(bt: Backtest, row, args):
         "val_SQN": safe_float(stats.get("SQN"), default=None),
         "val_Commissions [$]": safe_float(stats.get("Commissions [$]"), default=None),
         "val_overnight_count": int(overnight_count),
+
         "return_gap_val_minus_train": return_gap,
 
         "stop_loss_pct": stop_loss_pct,
@@ -170,7 +206,6 @@ def run_one_validation(bt: Backtest, row, args):
         "take_profit_%": take_profit_pct * 100,
         "range_end_hhmm": range_end_hhmm,
         "range_end_time": format_hhmm(range_end_hhmm),
-        #"allow_short": allow_short,
         "exit_hhmm": exit_hhmm,
     }
 
@@ -201,13 +236,6 @@ def parse_args():
     parser.add_argument("--top-n", type=int, default=DEFAULT_TOP_N)
     parser.add_argument("--no-dedupe", action="store_true")
 
-    #parser.add_argument(
-    #    "--force-allow-short",
-    #    choices=["true", "false"],
-    #    default=None,
-    #    help="預設沿用 train CSV 的 allow_short；指定 true/false 可覆蓋。",
-    #)
-
     parser.add_argument(
         "--commission-model",
         default=DEFAULT_COMMISSION_MODEL,
@@ -218,18 +246,16 @@ def parse_args():
 
     parser.add_argument("--dd-weight", type=float, default=DEFAULT_DD_WEIGHT)
     parser.add_argument("--pf-weight", type=float, default=DEFAULT_PF_WEIGHT)
+
     parser.add_argument(
         "--sort-by",
         default="val_rank_metric",
-        choices=["val_rank_metric", "val_return", "train_rank"],
+        choices=["val_rank_metric", "val_return", "val_strategy_minus_buyhold", "train_rank"],
     )
 
     parser.add_argument("--output-tag", default="train_top_val")
 
     args = parser.parse_args()
-
-    #if args.force_allow_short is not None:
-    #    args.force_allow_short = parse_bool_value(args.force_allow_short)
 
     return args
 
@@ -240,20 +266,49 @@ def main():
 
     print("========== 讀取 train top 參數 ==========")
     print(f"Train top CSV: {args.train_top_csv}")
+
     candidates = load_train_candidates(
         path=args.train_top_csv,
         top_n=args.top_n,
         dedupe=not args.no_dedupe,
     )
+
     print(f"候選參數組數：{len(candidates)}")
-    print(candidates[["train_source_rank", "stop_loss_%", "take_profit_%", "range_end_time"]].head(20)
-          if "stop_loss_%" in candidates.columns and "take_profit_%" in candidates.columns and "range_end_time" in candidates.columns
-          else candidates[["train_source_rank", "stop_loss_pct", "take_profit_pct", "range_end_hhmm"]].head(20))
+
+    if (
+        "stop_loss_%" in candidates.columns
+        and "take_profit_%" in candidates.columns
+        and "range_end_time" in candidates.columns
+    ):
+        print(
+            candidates[
+                [
+                    "train_source_rank",
+                    "stop_loss_%",
+                    "take_profit_%",
+                    "range_end_time",
+                ]
+            ].head(20)
+        )
+    else:
+        print(
+            candidates[
+                [
+                    "train_source_rank",
+                    "stop_loss_pct",
+                    "take_profit_pct",
+                    "range_end_hhmm",
+                ]
+            ].head(20)
+        )
 
     print("\n========== 載入 validation IB CSV 資料 ==========")
     print(f"Symbol: {symbol}")
-    print(f"Validation range: {args.val_start_year}-{args.val_start_month:02d} "
-          f"to {args.val_end_year}-{args.val_end_month:02d}")
+    print(
+        f"Validation range: "
+        f"{args.val_start_year}-{args.val_start_month:02d} "
+        f"to {args.val_end_year}-{args.val_end_month:02d}"
+    )
 
     data = load_ib_csv_range_data(
         symbol=symbol,
@@ -280,7 +335,11 @@ def main():
     print(f"Cash: {args.cash}")
     print(f"Commission model: {args.commission_model}")
     print(f"Spread: {args.spread}")
-    print(f"Rank metric: Return - {args.dd_weight} * abs(MaxDD) + {args.pf_weight} * (PF - 1)")
+    print(
+        f"Rank metric: "
+        f"Return - {args.dd_weight} * abs(MaxDD) "
+        f"+ {args.pf_weight} * (PF - 1)"
+    )
 
     bt = Backtest(
         data,
@@ -294,31 +353,40 @@ def main():
     )
 
     results = []
+
     for i, (_, row) in enumerate(candidates.iterrows(), start=1):
         try:
             result = run_one_validation(bt, row, args)
-            result.update({
-                "symbol": symbol,
-                "data_source": "ib_csv",
-                "train_top_csv": str(args.train_top_csv),
-                "val_start_year": args.val_start_year,
-                "val_start_month": args.val_start_month,
-                "val_end_year": args.val_end_year,
-                "val_end_month": args.val_end_month,
-                "commission_model": args.commission_model,
-                "spread": args.spread,
-                "cash": args.cash,
-            })
+
+            result.update(
+                {
+                    "symbol": symbol,
+                    "data_source": "ib_csv",
+                    "train_top_csv": str(args.train_top_csv),
+                    "val_start_year": args.val_start_year,
+                    "val_start_month": args.val_start_month,
+                    "val_end_year": args.val_end_year,
+                    "val_end_month": args.val_end_month,
+                    "commission_model": args.commission_model,
+                    "spread": args.spread,
+                    "cash": args.cash,
+                }
+            )
+
             results.append(result)
+
             print(
                 f"[{i}/{len(candidates)}] "
                 f"train_rank={result['train_source_rank']} "
                 f"SL={result['stop_loss_%']:.2f}% "
                 f"TP={result['take_profit_%']:.2f}% "
                 f"range={result['range_end_time']} "
-                f"val_return={result['val_Return [%]']:.2f}% "
-                f"val_pf={result['val_Profit Factor']:.2f}"
+                f"val_return={fmt_num(result['val_Return [%]'])}% "
+                f"buyhold={fmt_num(result['val_Buy & Hold Return [%]'])}% "
+                f"strategy-buyhold={fmt_num(result['val_Strategy - BuyHold [%]'])}% "
+                f"val_pf={fmt_num(result['val_Profit Factor'])}"
             )
+
         except Exception as exc:
             print(f"候選參數第 {i} 組失敗: {exc}")
 
@@ -330,8 +398,13 @@ def main():
 
     if args.sort_by == "val_rank_metric":
         out = out.sort_values("val_rank_metric", ascending=False).reset_index(drop=True)
+
     elif args.sort_by == "val_return":
         out = out.sort_values("val_Return [%]", ascending=False).reset_index(drop=True)
+
+    elif args.sort_by == "val_strategy_minus_buyhold":
+        out = out.sort_values("val_Strategy - BuyHold [%]", ascending=False).reset_index(drop=True)
+
     else:
         out = out.sort_values("train_source_rank", ascending=True).reset_index(drop=True)
 
@@ -343,28 +416,60 @@ def main():
         f"{args.val_start_year}_{args.val_start_month:02d}"
         f"_to_{args.val_end_year}_{args.val_end_month:02d}"
     )
+
     train_name = Path(args.train_top_csv).stem
     output_tag = args.output_tag.strip() or "train_top_val"
-    output_path = f"./result/orb_oos_val_{symbol}_{range_tag}_{output_tag}_from_{train_name}.csv"
+
+    output_path = (
+        f"./result/orb_oos_val_{symbol}_{range_tag}_"
+        f"{output_tag}_from_{train_name}.csv"
+    )
 
     out.to_csv(output_path, index=False, encoding="utf-8-sig")
 
     print("\n========== OOS validation 結果 ==========")
+
     display_cols = [
         "val_rank_sort",
         "train_source_rank",
         "val_rank_metric",
+
         "train_Return [%]",
+        "train_Buy & Hold Return [%]",
+        "train_Strategy - BuyHold [%]",
+
         "val_Return [%]",
+        "val_Buy & Hold Return [%]",
+        "val_Strategy - BuyHold [%]",
         "return_gap_val_minus_train",
+
         "val_Max. Drawdown [%]",
+        "val_Win Rate [%]",
         "val_Profit Factor",
         "val_# Trades",
+        "val_Commissions [$]",
+        "val_overnight_count",
+
         "stop_loss_%",
         "take_profit_%",
         "range_end_time",
     ]
-    print(out[display_cols].head(20))
+
+    existing_display_cols = [col for col in display_cols if col in out.columns]
+
+    pd.set_option("display.max_columns", None)
+    pd.set_option("display.width", 240)
+
+    print(out[existing_display_cols].head(20))
+
+    print("\n========== OOS summary ==========")
+    print(f"Rows: {len(out)}")
+    print(f"Best val_Return [%]: {fmt_num(out['val_Return [%]'].max())}%")
+    print(f"Best val_Strategy - BuyHold [%]: {fmt_num(out['val_Strategy - BuyHold [%]'].max())}%")
+    print(f"Median val_Return [%]: {fmt_num(out['val_Return [%]'].median())}%")
+    print(f"Median val_Strategy - BuyHold [%]: {fmt_num(out['val_Strategy - BuyHold [%]'].median())}%")
+    print(f"Median val_Profit Factor: {fmt_num(out['val_Profit Factor'].median())}")
+    print(f"Median val_Max. Drawdown [%]: {fmt_num(out['val_Max. Drawdown [%]'].median())}%")
 
     print("\n已輸出：")
     print(output_path)
