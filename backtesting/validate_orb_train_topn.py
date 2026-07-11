@@ -108,19 +108,19 @@ def run_one_validation(bt: Backtest, row, args):
     else:
         exit_hhmm = int(args.exit_hhmm)
 
-    if args.force_allow_short is not None:
-        allow_short = args.force_allow_short
-    elif "allow_short" in row:
-        allow_short = parse_bool_value(row["allow_short"], default=False)
-    else:
-        allow_short = False
+    #if args.force_allow_short is not None:
+    #    allow_short = args.force_allow_short
+    #elif "allow_short" in row:
+    #    allow_short = parse_bool_value(row["allow_short"], default=False)
+    #else:
+    #    allow_short = False
 
     stats = bt.run(
         stop_loss_pct=stop_loss_pct,
         take_profit_pct=take_profit_pct,
         range_end_hhmm=range_end_hhmm,
         exit_hhmm=exit_hhmm,
-        allow_short=allow_short,
+        #allow_short=allow_short,
     )
 
     trades = stats["_trades"]
@@ -131,15 +131,15 @@ def run_one_validation(bt: Backtest, row, args):
             trades["EntryTime"].dt.date != trades["ExitTime"].dt.date
         ).sum()
 
-    validate_rank_metric = calc_rank_metric(stats, args.dd_weight, args.pf_weight)
+    val_rank_metric = calc_rank_metric(stats, args.dd_weight, args.pf_weight)
 
     train_return = safe_float(row.get("Return [%]"), default=None)
-    validate_return = safe_float(stats.get("Return [%]"), default=None)
+    val_return = safe_float(stats.get("Return [%]"), default=None)
 
-    if train_return is None or validate_return is None:
+    if train_return is None or val_return is None:
         return_gap = None
     else:
-        return_gap = validate_return - train_return
+        return_gap = val_return - train_return
 
     out = {
         "train_source_rank": int(row.get("train_source_rank", 0)),
@@ -149,20 +149,20 @@ def run_one_validation(bt: Backtest, row, args):
         "train_Profit Factor": safe_float(row.get("Profit Factor"), default=None),
         "train_# Trades": safe_float(row.get("# Trades"), default=None),
 
-        "validate_rank_metric": validate_rank_metric,
-        "validate_Return [%]": validate_return,
-        "validate_Buy & Hold Return [%]": safe_float(stats.get("Buy & Hold Return [%]"), default=None),
-        "validate_Equity Final [$]": safe_float(stats.get("Equity Final [$]"), default=None),
-        "validate_Max. Drawdown [%]": safe_float(stats.get("Max. Drawdown [%]"), default=None),
-        "validate_# Trades": safe_float(stats.get("# Trades"), default=None),
-        "validate_Win Rate [%]": safe_float(stats.get("Win Rate [%]"), default=None),
-        "validate_Profit Factor": safe_float(stats.get("Profit Factor"), default=None),
-        "validate_Expectancy [%]": safe_float(stats.get("Expectancy [%]"), default=None),
-        "validate_Sharpe Ratio": safe_float(stats.get("Sharpe Ratio"), default=None),
-        "validate_SQN": safe_float(stats.get("SQN"), default=None),
-        "validate_Commissions [$]": safe_float(stats.get("Commissions [$]"), default=None),
-        "validate_overnight_count": int(overnight_count),
-        "return_gap_validate_minus_train": return_gap,
+        "val_rank_metric": val_rank_metric,
+        "val_Return [%]": val_return,
+        "val_Buy & Hold Return [%]": safe_float(stats.get("Buy & Hold Return [%]"), default=None),
+        "val_Equity Final [$]": safe_float(stats.get("Equity Final [$]"), default=None),
+        "val_Max. Drawdown [%]": safe_float(stats.get("Max. Drawdown [%]"), default=None),
+        "val_# Trades": safe_float(stats.get("# Trades"), default=None),
+        "val_Win Rate [%]": safe_float(stats.get("Win Rate [%]"), default=None),
+        "val_Profit Factor": safe_float(stats.get("Profit Factor"), default=None),
+        "val_Expectancy [%]": safe_float(stats.get("Expectancy [%]"), default=None),
+        "val_Sharpe Ratio": safe_float(stats.get("Sharpe Ratio"), default=None),
+        "val_SQN": safe_float(stats.get("SQN"), default=None),
+        "val_Commissions [$]": safe_float(stats.get("Commissions [$]"), default=None),
+        "val_overnight_count": int(overnight_count),
+        "return_gap_val_minus_train": return_gap,
 
         "stop_loss_pct": stop_loss_pct,
         "take_profit_pct": take_profit_pct,
@@ -170,7 +170,7 @@ def run_one_validation(bt: Backtest, row, args):
         "take_profit_%": take_profit_pct * 100,
         "range_end_hhmm": range_end_hhmm,
         "range_end_time": format_hhmm(range_end_hhmm),
-        "allow_short": allow_short,
+        #"allow_short": allow_short,
         "exit_hhmm": exit_hhmm,
     }
 
@@ -190,10 +190,10 @@ def parse_args():
     parser.add_argument("--ib-data-dir", default=DEFAULT_IB_DATA_DIR)
     parser.add_argument("--sec-type", default=DEFAULT_SEC_TYPE)
 
-    parser.add_argument("--validate-start-year", type=int, required=True)
-    parser.add_argument("--validate-start-month", type=int, required=True)
-    parser.add_argument("--validate-end-year", type=int, required=True)
-    parser.add_argument("--validate-end-month", type=int, required=True)
+    parser.add_argument("--val-start-year", type=int, required=True)
+    parser.add_argument("--val-start-month", type=int, required=True)
+    parser.add_argument("--val-end-year", type=int, required=True)
+    parser.add_argument("--val-end-month", type=int, required=True)
     parser.add_argument("--skip-missing", action="store_true")
 
     parser.add_argument("--cash", type=float, default=DEFAULT_CASH)
@@ -201,12 +201,12 @@ def parse_args():
     parser.add_argument("--top-n", type=int, default=DEFAULT_TOP_N)
     parser.add_argument("--no-dedupe", action="store_true")
 
-    parser.add_argument(
-        "--force-allow-short",
-        choices=["true", "false"],
-        default=None,
-        help="預設沿用 train CSV 的 allow_short；指定 true/false 可覆蓋。",
-    )
+    #parser.add_argument(
+    #    "--force-allow-short",
+    #    choices=["true", "false"],
+    #    default=None,
+    #    help="預設沿用 train CSV 的 allow_short；指定 true/false 可覆蓋。",
+    #)
 
     parser.add_argument(
         "--commission-model",
@@ -220,16 +220,16 @@ def parse_args():
     parser.add_argument("--pf-weight", type=float, default=DEFAULT_PF_WEIGHT)
     parser.add_argument(
         "--sort-by",
-        default="validate_rank_metric",
-        choices=["validate_rank_metric", "validate_return", "train_rank"],
+        default="val_rank_metric",
+        choices=["val_rank_metric", "val_return", "train_rank"],
     )
 
-    parser.add_argument("--output-tag", default="train_top_validate")
+    parser.add_argument("--output-tag", default="train_top_val")
 
     args = parser.parse_args()
 
-    if args.force_allow_short is not None:
-        args.force_allow_short = parse_bool_value(args.force_allow_short)
+    #if args.force_allow_short is not None:
+    #    args.force_allow_short = parse_bool_value(args.force_allow_short)
 
     return args
 
@@ -252,15 +252,15 @@ def main():
 
     print("\n========== 載入 validation IB CSV 資料 ==========")
     print(f"Symbol: {symbol}")
-    print(f"Validation range: {args.validate_start_year}-{args.validate_start_month:02d} "
-          f"to {args.validate_end_year}-{args.validate_end_month:02d}")
+    print(f"Validation range: {args.val_start_year}-{args.val_start_month:02d} "
+          f"to {args.val_end_year}-{args.val_end_month:02d}")
 
     data = load_ib_csv_range_data(
         symbol=symbol,
-        start_year=args.validate_start_year,
-        start_month=args.validate_start_month,
-        end_year=args.validate_end_year,
-        end_month=args.validate_end_month,
+        start_year=args.val_start_year,
+        start_month=args.val_start_month,
+        end_year=args.val_end_year,
+        end_month=args.val_end_month,
         data_dir=args.ib_data_dir,
         sec_type=args.sec_type,
         skip_missing=args.skip_missing,
@@ -301,10 +301,10 @@ def main():
                 "symbol": symbol,
                 "data_source": "ib_csv",
                 "train_top_csv": str(args.train_top_csv),
-                "validate_start_year": args.validate_start_year,
-                "validate_start_month": args.validate_start_month,
-                "validate_end_year": args.validate_end_year,
-                "validate_end_month": args.validate_end_month,
+                "val_start_year": args.val_start_year,
+                "val_start_month": args.val_start_month,
+                "val_end_year": args.val_end_year,
+                "val_end_month": args.val_end_month,
                 "commission_model": args.commission_model,
                 "spread": args.spread,
                 "cash": args.cash,
@@ -316,8 +316,8 @@ def main():
                 f"SL={result['stop_loss_%']:.2f}% "
                 f"TP={result['take_profit_%']:.2f}% "
                 f"range={result['range_end_time']} "
-                f"validate_return={result['validate_Return [%]']:.2f}% "
-                f"validate_pf={result['validate_Profit Factor']:.2f}"
+                f"val_return={result['val_Return [%]']:.2f}% "
+                f"val_pf={result['val_Profit Factor']:.2f}"
             )
         except Exception as exc:
             print(f"候選參數第 {i} 組失敗: {exc}")
@@ -328,38 +328,38 @@ def main():
 
     out = pd.DataFrame(results)
 
-    if args.sort_by == "validate_rank_metric":
-        out = out.sort_values("validate_rank_metric", ascending=False).reset_index(drop=True)
-    elif args.sort_by == "validate_return":
-        out = out.sort_values("validate_Return [%]", ascending=False).reset_index(drop=True)
+    if args.sort_by == "val_rank_metric":
+        out = out.sort_values("val_rank_metric", ascending=False).reset_index(drop=True)
+    elif args.sort_by == "val_return":
+        out = out.sort_values("val_Return [%]", ascending=False).reset_index(drop=True)
     else:
         out = out.sort_values("train_source_rank", ascending=True).reset_index(drop=True)
 
-    out["validate_rank_after_sort"] = range(1, len(out) + 1)
+    out["val_rank_sort"] = range(1, len(out) + 1)
 
     os.makedirs("./result", exist_ok=True)
 
     range_tag = (
-        f"{args.validate_start_year}_{args.validate_start_month:02d}"
-        f"_to_{args.validate_end_year}_{args.validate_end_month:02d}"
+        f"{args.val_start_year}_{args.val_start_month:02d}"
+        f"_to_{args.val_end_year}_{args.val_end_month:02d}"
     )
     train_name = Path(args.train_top_csv).stem
-    output_tag = args.output_tag.strip() or "train_top_validate"
-    output_path = f"./result/orb_oos_validate_{symbol}_{range_tag}_{output_tag}_from_{train_name}.csv"
+    output_tag = args.output_tag.strip() or "train_top_val"
+    output_path = f"./result/orb_oos_val_{symbol}_{range_tag}_{output_tag}_from_{train_name}.csv"
 
     out.to_csv(output_path, index=False, encoding="utf-8-sig")
 
     print("\n========== OOS validation 結果 ==========")
     display_cols = [
-        "validate_rank_after_sort",
+        "val_rank_sort",
         "train_source_rank",
-        "validate_rank_metric",
+        "val_rank_metric",
         "train_Return [%]",
-        "validate_Return [%]",
-        "return_gap_validate_minus_train",
-        "validate_Max. Drawdown [%]",
-        "validate_Profit Factor",
-        "validate_# Trades",
+        "val_Return [%]",
+        "return_gap_val_minus_train",
+        "val_Max. Drawdown [%]",
+        "val_Profit Factor",
+        "val_# Trades",
         "stop_loss_%",
         "take_profit_%",
         "range_end_time",

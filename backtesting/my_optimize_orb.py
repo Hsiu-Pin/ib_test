@@ -16,7 +16,7 @@ from strategy.optimize_orb import *
 
 stg = OpeningRangeBreakout
 # stg = VWAPBreakout
-post_fix = "5m_orb_ib_range_v3"
+post_fix = "5m"
 
 DEFAULT_SYMBOL = "TSLA"
 DEFAULT_IB_DATA_DIR = "./ib_data"
@@ -428,7 +428,7 @@ def main():
                         take_profit_pct=take_profit_pct,
                         range_end_hhmm=range_end_hhmm,
                         exit_hhmm=args.exit_hhmm,
-                        allow_short=args.allow_short,
+                        #allow_short=args.allow_short,
                     )
 
                     trades = stats["_trades"]
@@ -516,8 +516,8 @@ def main():
     user_tag = f"_{args.output_tag}" if args.output_tag else ""
     output_postfix = f"{symbol}_{range_tag}_{post_fix}{user_tag}"
 
-    full_path = f"./result/orb_optimization_{output_postfix}.csv"
-    top_path = f"./result/orb_optimization_top{args.top_n}_{output_postfix}.csv"
+    full_path = f"./result/orb_{output_postfix}.csv"
+    top_path = f"./result/orb_top{args.top_n}_{output_postfix}.csv"
 
     df.to_csv(full_path, index=False, encoding="utf-8-sig")
     topn = df.head(args.top_n)

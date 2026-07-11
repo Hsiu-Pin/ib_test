@@ -6,10 +6,39 @@ class OpeningRangeBreakout(Strategy):
     """
     Long-only Opening Range Breakout.
 
-    entry_mode:
-        "breakout" = 突破 opening_high 直接買
-        "retest"   = 先突破 opening_high，之後回踩 opening_high 附近再買
+    Data assumption:
+        IB 5m CSV timestamp is bar start time.
+
+        Example:
+            09:30 row = 09:30~09:35 bar
+            09:35 row = 09:35~09:40 bar
+            09:40 row = 09:40~09:45 bar
+            09:45 row = 09:45~09:50 bar
+
+    Therefore:
+        range_end_hhmm = 945
+
+        opening range includes:
+            09:30, 09:35, 09:40
+
+        first possible signal bar:
+            09:45 bar
+
+    Important:
+        This strategy uses the signal bar close as the entry reference price.
+
+        If you want the backtest to enter on that same close, use:
+
+            Backtest(..., trade_on_close=True)
+
+        If trade_on_close=False, backtesting.py may execute market orders
+        on the next bar open, and SL/TP percentages may no longer match
+        exactly from the real entry price.
     """
+
+    # ------------------------------------------------------------
+    # Optimizable parameters
+    # ------------------------------------------------------------
 
     stop_loss_pct = 0.015
     take_profit_pct = 0.0275
@@ -18,18 +47,46 @@ class OpeningRangeBreakout(Strategy):
     exit_hhmm = 1545
     entry_deadline_hhmm = 1130
 
-    allow_short = False
+    entry_mode = "breakout"       # "breakout" or "retest"
 
-    entry_mode = "breakout"
+    breakout_buffer_pct = 0.0     # 0.0005 = 0.05% above opening_high
+    retest_buffer_pct = 0.003     # 0.003 = 0.3% retest band
 
-    breakout_buffer_pct = 0.0
-    retest_buffer_pct = 0.003
+    # ------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------
 
     def _hhmm_to_time(self, hhmm):
         hhmm = int(hhmm)
         hour = hhmm // 100
         minute = hhmm % 100
         return time(hour, minute)
+
+    def _reset_day_state(self, today):
+        self.current_day = today
+
+        self.opening_high = None
+        self.opening_low = None
+
+        self.traded_today = False
+        self.breakout_seen = False
+
+    def _long_entry(self, price):
+        """
+        Enter long using fixed percentage stop loss and take profit.
+
+        Because price is self.data.Close[-1], this assumes the signal bar
+        close is the intended entry reference.
+        """
+        self.buy(
+            sl=price * (1 - self.stop_loss_pct),
+            tp=price * (1 + self.take_profit_pct),
+        )
+        self.traded_today = True
+
+    # ------------------------------------------------------------
+    # backtesting.py lifecycle
+    # ------------------------------------------------------------
 
     def init(self):
         self.current_day = None
@@ -54,25 +111,25 @@ class OpeningRangeBreakout(Strategy):
         high = self.data.High[-1]
         low = self.data.Low[-1]
 
-        # 新的一天：重置狀態
+        # New trading day
         if self.current_day != today:
-            self.current_day = today
-            self.opening_high = None
-            self.opening_low = None
-            self.traded_today = False
-            self.breakout_seen = False
+            self._reset_day_state(today)
 
-        # 還沒開盤
+        # Ignore pre-market data if present
         if current_time < self.market_open:
             return
 
-        # 收盤前強制平倉
+        # Force intraday exit
         if current_time >= self.exit_time:
             if self.position:
                 self.position.close()
             return
 
-        # 建立 opening range
+        # Build opening range
+        #
+        # With IB bar-start timestamps:
+        #   09:30, 09:35, 09:40 are included when range_end = 09:45.
+        #   09:45 is the first post-range bar.
         if self.market_open <= current_time < self.range_end:
             if self.opening_high is None:
                 self.opening_high = high
@@ -82,54 +139,55 @@ class OpeningRangeBreakout(Strategy):
                 self.opening_low = min(self.opening_low, low)
             return
 
-        # opening range 還沒建立好
+        # Opening range must be ready
         if self.opening_high is None or self.opening_low is None:
             return
 
-        # 今天已經交易過
+        # Long-only, one trade per day
         if self.traded_today:
             return
 
-        # 已經有持倉
+        # Do not enter if already holding a position
         if self.position:
             return
 
-        # 超過最晚進場時間
+        # Do not enter too late
+        #
+        # With bar-start timestamps:
+        #   current_time = 11:25 means 11:25~11:30 bar.
+        #   current_time = 11:30 means 11:30~11:35 bar.
+        #
+        # This condition excludes the 11:30 bar and later.
         if current_time >= self.entry_deadline:
             return
 
         breakout_level = self.opening_high * (1 + self.breakout_buffer_pct)
-        retest_level = self.opening_high * (1 + self.retest_buffer_pct)
 
-        # ======================================================
-        # 模式 1：直接突破進場
-        # ======================================================
+        # --------------------------------------------------------
+        # Mode 1: breakout entry
+        # --------------------------------------------------------
         if self.entry_mode == "breakout":
             if price > breakout_level:
-                self.buy(
-                    sl=price * (1 - self.stop_loss_pct),
-                    tp=price * (1 + self.take_profit_pct)
-                )
-                self.traded_today = True
+                self._long_entry(price)
+            return
 
-        # ======================================================
-        # 模式 2：突破後等待回踩
-        # ======================================================
-        elif self.entry_mode == "retest":
-
-            # 先看到突破
+        # --------------------------------------------------------
+        # Mode 2: breakout first, then retest
+        # --------------------------------------------------------
+        if self.entry_mode == "retest":
             if not self.breakout_seen:
                 if price > breakout_level:
                     self.breakout_seen = True
                 return
 
-            # 突破後回踩 opening_high 附近，且收盤仍站上 opening_high
-            if low <= retest_level and price > self.opening_high:
-                self.buy(
-                    sl=price * (1 - self.stop_loss_pct),
-                    tp=price * (1 + self.take_profit_pct)
-                )
-                self.traded_today = True
+            retest_lower = self.opening_high * (1 - self.retest_buffer_pct)
+            retest_upper = self.opening_high * (1 + self.retest_buffer_pct)
 
-        else:
-            raise ValueError(f"未知 entry_mode: {self.entry_mode}")
+            touched_retest_zone = retest_lower <= low <= retest_upper
+            closed_back_above_range = price > self.opening_high
+
+            if touched_retest_zone and closed_back_above_range:
+                self._long_entry(price)
+            return
+
+        raise ValueError(f"Unknown entry_mode: {self.entry_mode}")
