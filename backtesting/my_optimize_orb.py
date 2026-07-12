@@ -31,6 +31,13 @@ DEFAULT_CASH = 10000
 DEFAULT_ALLOW_SHORT = False
 DEFAULT_EXIT_HHMM = 1530
 
+# Gap filter default
+# CLI uses percent units, e.g. -3.0 means -3%.
+# Strategy receives decimal units, e.g. -0.03.
+DEFAULT_USE_GAP_FILTER = False
+DEFAULT_MIN_GAP_PCT = -3.0
+DEFAULT_MAX_GAP_PCT = 3.0
+
 # 建議搜索策略：
 # 1. 固定 long-only ORB
 # 2. 先重點測 09:45, 09:50, 10:00
@@ -197,6 +204,37 @@ def load_ib_csv_range_data(
     return data
 
 
+def add_gap_pct_column(data: pd.DataFrame) -> pd.DataFrame:
+    """
+    Add GapPct column for optional gap filter.
+
+    GapPct = today regular-session open / previous regular-session close - 1
+
+    Notes:
+        - Uses only the loaded 5m data.
+        - The first loaded trading day has no previous close, so GapPct is NaN.
+        - If use_gap_filter=True, the first loaded trading day will be skipped.
+        - If use_gap_filter=False, this column has no effect.
+    """
+    if data is None or data.empty:
+        return data
+
+    df = data.copy()
+    trade_dates = pd.Series(df.index.date, index=df.index, name="TradeDate")
+
+    daily = df.groupby(trade_dates).agg(
+        day_open=("Open", "first"),
+        day_close=("Close", "last"),
+    )
+    daily["prev_day_close"] = daily["day_close"].shift(1)
+    daily["gap_pct"] = daily["day_open"] / daily["prev_day_close"] - 1.0
+
+    gap_map = daily["gap_pct"].to_dict()
+    df["GapPct"] = [gap_map.get(d) for d in df.index.date]
+
+    return df
+
+
 # ============================================================
 # 3. IBKR commission / 成本模型
 # ============================================================
@@ -317,6 +355,25 @@ def parse_args():
     parser.add_argument("--allow-short", action="store_true", default=DEFAULT_ALLOW_SHORT)
     parser.add_argument("--exit-hhmm", type=int, default=DEFAULT_EXIT_HHMM)
 
+    parser.add_argument(
+        "--use-gap-filter",
+        action="store_true",
+        default=DEFAULT_USE_GAP_FILTER,
+        help="啟用 gap filter。啟用後只交易 min/max gap pct 範圍內的日子。",
+    )
+    parser.add_argument(
+        "--min-gap-pct",
+        type=float,
+        default=DEFAULT_MIN_GAP_PCT,
+        help="gap 下限，單位是百分比。例如 -3.0 表示 -3%。",
+    )
+    parser.add_argument(
+        "--max-gap-pct",
+        type=float,
+        default=DEFAULT_MAX_GAP_PCT,
+        help="gap 上限，單位是百分比。例如 3.0 表示 +3%。",
+    )
+
     parser.add_argument("--range-end-times", default=",".join(str(x) for x in DEFAULT_RANGE_END_TIMES))
 
     parser.add_argument("--sl-start-pct", type=float, default=DEFAULT_SL_START_PCT)
@@ -386,6 +443,8 @@ def main():
         skip_missing=args.skip_missing,
     )
 
+    data = add_gap_pct_column(data)
+
     print(data.head())
     print("...")
     print(data.tail())
@@ -404,6 +463,9 @@ def main():
     print(f"TP: {args.tp_start_pct:.2f}% ~ {args.tp_end_pct:.2f}%, step {args.tp_step_pct:.2f}% ({len(take_profit_values)} 組)")
     print(f"判斷方向時間：{[format_hhmm(x) for x in range_end_times]}")
     print(f"是否允許做空：{args.allow_short}")
+    print(f"Gap filter: {args.use_gap_filter}")
+    if args.use_gap_filter:
+        print(f"Gap range: {args.min_gap_pct:.2f}% ~ {args.max_gap_pct:.2f}%")
     print(f"Cash: {args.cash}")
     print(f"Commission model: {args.commission_model}")
     print(f"Spread: {args.spread}")
@@ -435,6 +497,9 @@ def main():
                         take_profit_pct=take_profit_pct,
                         range_end_hhmm=range_end_hhmm,
                         exit_hhmm=args.exit_hhmm,
+                        use_gap_filter=args.use_gap_filter,
+                        min_gap_pct=args.min_gap_pct / 100.0,
+                        max_gap_pct=args.max_gap_pct / 100.0,
                         #allow_short=args.allow_short,
                     )
 
@@ -473,6 +538,12 @@ def main():
 
                         "allow_short": args.allow_short,
                         "exit_hhmm": args.exit_hhmm,
+
+                        "use_gap_filter": args.use_gap_filter,
+                        "min_gap_pct": args.min_gap_pct / 100.0,
+                        "max_gap_pct": args.max_gap_pct / 100.0,
+                        "min_gap_%": args.min_gap_pct,
+                        "max_gap_%": args.max_gap_pct,
 
                         "Return [%]": safe_float(stats["Return [%]"]),
                         "Buy & Hold Return [%]": safe_float(stats["Buy & Hold Return [%]"]),
@@ -557,6 +628,9 @@ def main():
         "stop_loss_%",
         "take_profit_%",
         "range_end_time",
+        "use_gap_filter",
+        "min_gap_%",
+        "max_gap_%",
         "Max. Drawdown [%]",
         "# Trades",
         "Win Rate [%]",

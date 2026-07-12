@@ -9,9 +9,9 @@ REM    注意：第二步不會重新最佳化參數
 REM ============================================================
 
 set SYMBOL=TSLA
-set sch_st_yr=2025
+set sch_st_yr=2024
 set sch_st_mn=01
-set sch_ed_yr=2025
+set sch_ed_yr=2024
 set sch_ed_mn=12
 
 set vld_st_yr=2026
@@ -39,6 +39,9 @@ python my_optimize_orb.py --symbol %SYMBOL% ^
 --cash %CASH% ^
 --commission-model %COMMISSION_MODEL% ^
 --spread %SPREAD% ^
+--use-gap-filter ^
+--min-gap-pct -3.0 ^
+--max-gap-pct 3.0 ^
 --range-end-times 945  ^
 --sl-start-pct    0.0  ^
 --sl-end-pct      4.0  ^

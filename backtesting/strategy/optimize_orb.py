@@ -52,6 +52,14 @@ class OpeningRangeBreakout(Strategy):
     breakout_buffer_pct = 0.0     # 0.0005 = 0.05% above opening_high
     retest_buffer_pct = 0.003     # 0.003 = 0.3% retest band
 
+    # Gap filter
+    # use_gap_filter=False keeps the original behavior unchanged.
+    # min_gap_pct / max_gap_pct are decimal values:
+    #   -0.03 = -3%, 0.03 = +3%
+    use_gap_filter = False
+    min_gap_pct = -0.03
+    max_gap_pct = 0.03
+
     # ------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------
@@ -160,6 +168,20 @@ class OpeningRangeBreakout(Strategy):
         # This condition excludes the 11:30 bar and later.
         if current_time >= self.entry_deadline:
             return
+
+        # Optional gap filter
+        # GapPct is added by my_optimize_orb.py.
+        # If the filter is enabled and today's gap is outside the allowed range,
+        # mark the day as traded so the strategy does not keep checking entries.
+        if self.use_gap_filter:
+            try:
+                gap_pct = float(self.data.GapPct[-1])
+            except Exception:
+                gap_pct = float("nan")
+
+            if gap_pct != gap_pct or gap_pct < self.min_gap_pct or gap_pct > self.max_gap_pct:
+                self.traded_today = True
+                return
 
         breakout_level = self.opening_high * (1 + self.breakout_buffer_pct)
 
