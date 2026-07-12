@@ -35,6 +35,9 @@ Percent arguments accept either decimal form or percentage-point form:
   --sl-pct 3.25%    -> 3.25%
 """
 
+# 注意：這是 v2 的完整註解／稽核版。
+# 只新增註解與 docstring，交易條件及下單邏輯刻意保持不變。
+
 from __future__ import annotations
 
 import argparse
@@ -91,6 +94,7 @@ class Candle:
 
     @property
     def end(self) -> datetime:
+        """回傳這根 5 分鐘 K 棒的結束時間。策略用結束時間判斷 ORB 是否完成、是否超過進場截止時間。"""
         return self.start + timedelta(minutes=BAR_MINUTES)
 
 
@@ -114,7 +118,11 @@ class Config:
 
 class ORBPaperTrader(EWrapper, EClient):
     def __init__(self, cfg: Config) -> None:
+        """建立交易機器人的所有設定、同步物件與狀態變數。此處只初始化記憶體狀態，不連線、不請求資料，也不下單。"""
+        # EWrapper 負責接收「TWS／IB Gateway 傳回來」的 callbacks。
         EWrapper.__init__(self)
+        # EClient 提供「送往 TWS／IB Gateway」的 request methods。傳入 self，
+        # 讓 EClient 收到的訊息回到同一個物件內的 EWrapper callbacks。
         EClient.__init__(self, self)
 
         self.cfg = cfg
@@ -173,27 +181,40 @@ class ORBPaperTrader(EWrapper, EClient):
     # ------------------------------------------------------------------
     @staticmethod
     def log(message: str) -> None:
+        """用美東時間印出可追蹤的 log。所有關鍵狀態改變與 IB callback 都透過此函式留下紀錄。"""
         now = datetime.now(NY)
         print(f"[{now:%Y-%m-%d %H:%M:%S %Z}] {message}", flush=True)
 
     def fatal(self, message: str) -> None:
+        """記錄不可繼續交易的致命原因並設定 stop_event，讓 main loop 進入 shutdown。它不會直接在 callback 執行緒中強制結束程序。"""
         self.fatal_reason = message
         self.log(f"FATAL: {message}")
         self.stop_event.set()
 
     def start_requests(self) -> None:
+        """在 nextValidId 已確認連線後，向 IB 同時請求帳戶清單、持倉快照與合約資訊。三個請求的結果會分別進入 managedAccounts、position/positionEnd、contractDetails/contractDetailsEnd callbacks。"""
         self.log(
             f"Connected to {self.cfg.host}:{self.cfg.port}, clientId={self.cfg.client_id}."
         )
+        # 查詢這個 API session 可以控制哪些帳戶。
+        # 對應 callback：managedAccounts()。
         self.reqManagedAccts()
+        # 訂閱所有持倉，先收到一份初始快照，之後持續接收更新。
+        # 對應 callbacks：多次 position()，最後 positionEnd()。
         self.reqPositions()
+        # 把只有 symbol 的 Contract 解析成唯一 conId 與合法 minTick。
+        # 對應 callbacks：contractDetails()，最後 contractDetailsEnd()。
         self.reqContractDetails(CONTRACT_REQ_ID, self.base_contract)
 
     def shutdown(self) -> None:
+        """停止背景迴圈、取消行情與持倉訂閱並斷線。每個取消動作都包在 try/except，避免關閉過程因單一 API 例外中斷。"""
         self.stop_event.set()
         for call in (
+            # 停止 keepUpToDate 的歷史／即時 5 分鐘 K 棒串流。
             lambda: self.cancelHistoricalData(HISTORICAL_REQ_ID),
+            # 停止 top-of-book／last price 行情 ticks。
             lambda: self.cancelMktData(MARKET_DATA_REQ_ID),
+            # 停止 reqPositions() 建立的持倉更新。
             self.cancelPositions,
         ):
             try:
@@ -207,6 +228,7 @@ class ORBPaperTrader(EWrapper, EClient):
             pass
 
     def _clock_loop(self) -> None:
+        """每秒呼叫一次時間控制，負責到達 entry cutoff 後記錄狀態，以及在 flatten time 觸發強制平倉。"""
         while not self.stop_event.wait(1.0):
             try:
                 self._check_time_controls()
@@ -217,12 +239,14 @@ class ORBPaperTrader(EWrapper, EClient):
     # IB connection callbacks
     # ------------------------------------------------------------------
     def nextValidId(self, orderId: int) -> None:  # noqa: N802 (IB callback name)
+        """IB 連線完成後回呼可用的下一個 order ID。收到它代表 API session 已可開始發送請求與委託。"""
         with self.state_lock:
             self.next_order_id = orderId
         self.connected_event.set()
         self.log(f"Next valid order ID: {orderId}")
 
     def managedAccounts(self, accountsList: str) -> None:  # noqa: N802
+        """接收 IB 可管理帳戶，選定單一帳戶並執行 paper-account guard。多帳戶時要求使用 --account 明確指定。"""
         accounts = [item.strip() for item in accountsList.split(",") if item.strip()]
         with self.state_lock:
             self.managed_accounts = accounts
@@ -259,11 +283,13 @@ class ORBPaperTrader(EWrapper, EClient):
             self.log(f"Paper account selected: {selected}")
 
     def connectionClosed(self) -> None:  # noqa: N802
+        """IB socket 關閉時的 callback。只記錄並停止主迴圈；目前版本不會自動重連或重訂閱。"""
         self.log("IB connection closed.")
         self.stop_event.set()
 
     # Supports both older and newer ibapi callback signatures.
     def error(self, reqId, *args) -> None:  # noqa: N802, ANN001
+        """相容新舊 ibapi error callback 參數格式，分類一般狀態碼、行情權限錯誤、連線中斷與致命連線錯誤。新版 ibapi 可能多傳 errorTime，因此使用 *args 解析。"""
         error_time = None
         error_code = None
         error_string = ""
@@ -324,6 +350,7 @@ class ORBPaperTrader(EWrapper, EClient):
     # Contract and market data
     # ------------------------------------------------------------------
     def _make_stock_contract(self) -> Contract:
+        """建立尚未 qualified 的美股 Contract 查詢條件。SMART 負責路由，primaryExchange 可用來消除同名 ticker 歧義。"""
         contract = Contract()
         contract.symbol = self.cfg.symbol
         contract.secType = "STK"
@@ -334,10 +361,12 @@ class ORBPaperTrader(EWrapper, EClient):
         return contract
 
     def contractDetails(self, reqId, contractDetails) -> None:  # noqa: N802, ANN001
+        """逐筆收集 reqContractDetails 回傳的候選合約；真正選擇與驗證在 contractDetailsEnd 完成。"""
         if reqId == CONTRACT_REQ_ID:
             self.contract_candidates.append(contractDetails)
 
     def contractDetailsEnd(self, reqId: int) -> None:  # noqa: N802
+        """候選合約全部回傳後選定目標合約、取得 minTick，然後啟動行情與 5 分鐘 K 棒請求。"""
         if reqId != CONTRACT_REQ_ID:
             return
         if not self.contract_candidates:
@@ -377,13 +406,19 @@ class ORBPaperTrader(EWrapper, EClient):
         self._start_market_requests()
 
     def _start_market_requests(self) -> None:
+        """只執行一次：要求 live market data、訂閱 last price，並用 reqHistoricalData(..., keepUpToDate=True) 同時取得當日歷史 K 棒及後續更新。"""
         with self.state_lock:
             if self.requests_started or self.contract is None:
                 return
             self.requests_started = True
 
         # Force a live-data request. Entry logic requires marketDataType == 1.
+        # 明確要求 live data（type 1），而不是 delayed／frozen。若帳戶沒有權限，
+        # IB 仍可能回傳其他類型。對應 callback：marketDataType()。
         self.reqMarketDataType(1)
+        # 訂閱 top-of-book／last price ticks。策略不使用 tick 作為進場訊號；
+        # 這個請求主要用來確認即時行情權限並保留診斷價格。
+        # 對應 callbacks 包含 tickPrice() 與 error()。
         self.reqMktData(
             MARKET_DATA_REQ_ID,
             self.contract,
@@ -395,6 +430,9 @@ class ORBPaperTrader(EWrapper, EClient):
 
         # formatDate=2 returns epoch timestamps for intraday bars.
         # keepUpToDate=True sends updates through historicalDataUpdate().
+        # 請求一天、5 分鐘、regular session、TRADES 類型的 K 棒。
+        # keepUpToDate=True 會把歷史請求延伸成持續更新的 K 棒串流：
+        # historicalData() → historicalDataEnd() → historicalDataUpdate()。
         self.reqHistoricalData(
             HISTORICAL_REQ_ID,
             self.contract,
@@ -410,6 +448,7 @@ class ORBPaperTrader(EWrapper, EClient):
         self.log("Requested live market data and streaming 5-minute bars.")
 
     def marketDataType(self, reqId: int, marketDataType: int) -> None:  # noqa: N802
+        """接收 IB 實際提供的行情種類。只有 marketDataType == 1 才允許進場；frozen、delayed、delayed-frozen 全部禁止交易。"""
         if reqId != MARKET_DATA_REQ_ID:
             return
         names = {1: "live", 2: "frozen", 3: "delayed", 4: "delayed-frozen"}
@@ -424,6 +463,7 @@ class ORBPaperTrader(EWrapper, EClient):
             self.log("No entries will be sent unless market data type becomes live (1).")
 
     def tickPrice(self, reqId, tickType, price, attrib) -> None:  # noqa: N802, ANN001
+        """接收 last price 或 delayed last price，僅供診斷保存。ORB 訊號與部位 sizing 實際使用完整 5 分鐘 K 棒的 close。"""
         if reqId != MARKET_DATA_REQ_ID or price is None or price <= 0:
             return
         # Tick types 4=LAST, 68=DELAYED_LAST. Delayed data is still rejected by
@@ -436,6 +476,7 @@ class ORBPaperTrader(EWrapper, EClient):
     # Position callbacks and safety
     # ------------------------------------------------------------------
     def position(self, account, contract, position, avgCost) -> None:  # noqa: N802, ANN001
+        """接收 reqPositions 的持倉快照與後續更新，追蹤指定股票在選定帳戶的數量；任何非零持倉都視為已有部位。"""
         if contract.secType != "STK" or contract.symbol.upper() != self.cfg.symbol:
             return
         if self.selected_account and account != self.selected_account:
@@ -449,6 +490,7 @@ class ORBPaperTrader(EWrapper, EClient):
             self.in_position = pos != 0
 
     def positionEnd(self) -> None:  # noqa: N802
+        """表示初始持倉快照已完成。若啟動時已有該股票持倉，程式直接 fatal，避免和人工或其他策略共用同一部位。"""
         with self.state_lock:
             self.initial_positions_loading = False
             self.position_snapshot_complete = True
@@ -466,6 +508,7 @@ class ORBPaperTrader(EWrapper, EClient):
     # Historical/live bar callbacks
     # ------------------------------------------------------------------
     def historicalData(self, reqId, bar) -> None:  # noqa: N802, ANN001
+        """接收 reqHistoricalData 初始批次中的每一根 K 棒，轉成 Candle 後暫存；此 callback 尚不直接驅動策略。"""
         if reqId != HISTORICAL_REQ_ID:
             return
         try:
@@ -476,6 +519,7 @@ class ORBPaperTrader(EWrapper, EClient):
         self.initial_bars[candle.start] = candle
 
     def historicalDataEnd(self, reqId, start, end) -> None:  # noqa: N802, ANN001
+        """初始 K 棒批次完成後，重建今天已完成的 ORB 狀態，並把最後一根當成目前未完成的 streaming cursor。非交易日只保留游標，不把前一交易日當成今天。"""
         if reqId != HISTORICAL_REQ_ID:
             return
 
@@ -516,6 +560,7 @@ class ORBPaperTrader(EWrapper, EClient):
         )
 
     def historicalDataUpdate(self, reqId, bar) -> None:  # noqa: N802, ANN001
+        """keepUpToDate=True 的即時更新 callback。相同 start time 代表目前 K 棒仍在變動；start time 前進時，前一根才正式視為 closed bar 並送進策略。"""
         if reqId != HISTORICAL_REQ_ID:
             return
         try:
@@ -560,6 +605,7 @@ class ORBPaperTrader(EWrapper, EClient):
 
     @staticmethod
     def _bar_timestamp_to_et(raw_value) -> datetime:  # noqa: ANN001
+        """把 IB 可能回傳的 epoch 秒、毫秒或字串時間轉成帶 America/New_York timezone 的 datetime。"""
         raw = str(raw_value).strip()
         if raw.isdigit():
             # formatDate=2 intraday bars normally arrive as Unix epoch seconds.
@@ -583,6 +629,7 @@ class ORBPaperTrader(EWrapper, EClient):
         raise ValueError(f"unsupported IB bar timestamp: {raw!r}")
 
     def _to_candle(self, bar) -> Candle:  # noqa: ANN001
+        """把 IB BarData 物件標準化成內部 Candle，讓後續策略不直接依賴 ibapi 的欄位型別。"""
         return Candle(
             start=self._bar_timestamp_to_et(bar.date),
             open=float(bar.open),
@@ -596,6 +643,7 @@ class ORBPaperTrader(EWrapper, EClient):
     # Strategy state machine
     # ------------------------------------------------------------------
     def _reset_for_date(self, session_date: date) -> None:
+        """新交易日第一根已完成 K 棒到來時重設 ORB 與訂單狀態。若跨日仍有持倉，視為安全異常並停止。"""
         with self.state_lock:
             if self.trade_date == session_date:
                 return
@@ -629,6 +677,7 @@ class ORBPaperTrader(EWrapper, EClient):
         self.log(f"New ORB session: {session_date.isoformat()}")
 
     def _process_closed_bar(self, candle: Candle, historical: bool) -> None:
+        """ORB 狀態機核心：累積 09:30 到 range_end 的 high/low、完成 opening range、檢查收盤突破、區分歷史已錯過訊號與真正 live 訊號，最後呼叫 _submit_entry。"""
         self._reset_for_date(candle.start.date())
         if self.stop_event.is_set():
             return
@@ -717,6 +766,7 @@ class ORBPaperTrader(EWrapper, EClient):
     # Orders
     # ------------------------------------------------------------------
     def _allocate_order_ids(self, count: int) -> List[int]:
+        """從 nextValidId 管理的本地計數器一次配置連續 order IDs。Bracket order 需要 parent、TP、SL 三個不同 ID。"""
         with self.state_lock:
             if self.next_order_id is None:
                 raise RuntimeError("nextValidId has not been received")
@@ -725,12 +775,14 @@ class ORBPaperTrader(EWrapper, EClient):
         return list(range(start, start + count))
 
     def _round_to_tick(self, price: float) -> float:
+        """按照 qualified contract 的 minTick 將價格四捨五入到合法跳動單位，避免 IB 因價格精度拒單。"""
         p = Decimal(str(price))
         ticks = (p / self.min_tick).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
         rounded = ticks * self.min_tick
         return float(rounded)
 
     def _base_order(self) -> Order:
+        """建立所有委託共用欄位：DAY、僅 regular trading hours、指定帳戶與 orderRef。呼叫者再補 action、orderType、quantity 與價格。"""
         order = Order()
         order.tif = "DAY"
         order.outsideRth = False
@@ -739,6 +791,7 @@ class ORBPaperTrader(EWrapper, EClient):
         return order
 
     def _submit_entry(self, trigger_price: float) -> None:
+        """進場前的最後安全閘門與 bracket 建構。檢查每日一次、paper 帳戶、持倉快照、即時行情、合約；計算股數後建立 market parent、limit TP 與 stop-market SL。"""
         with self.state_lock:
             if self.traded_today:
                 self.log("Entry ignored: this strategy has already traded today.")
@@ -827,6 +880,8 @@ class ORBPaperTrader(EWrapper, EClient):
             self.order_objects[sl_id] = stop_loss
 
         # Transmitting the final child releases the full bracket together.
+        # 依序送出 parent 與兩張 child orders。parent／TP 的 transmit=False
+        # 先把訂單暫存在 TWS；最後 SL 的 transmit=True 才一起釋放整組 bracket。
         self.placeOrder(parent_id, self.contract, parent)
         self.placeOrder(tp_id, self.contract, take_profit)
         self.placeOrder(sl_id, self.contract, stop_loss)
@@ -851,6 +906,7 @@ class ORBPaperTrader(EWrapper, EClient):
         whyHeld,
         mktCapPrice=0.0,
     ) -> None:  # ANN001
+        """IB 委託狀態 callback。追蹤 entry/TP/SL/flatten 是否成交；entry 完全成交後按實際均價修改出口價，保護停損失效時觸發緊急平倉。"""
         self.log(
             f"Order {orderId}: status={status}, filled={filled}, "
             f"remaining={remaining}, avgFill={avgFillPrice}."
@@ -890,6 +946,7 @@ class ORBPaperTrader(EWrapper, EClient):
             self._flatten_position("protective stop inactive")
 
     def _adjust_exits_to_fill(self, fill_price: float) -> None:
+        """父單完全成交後，以實際 avgFillPrice 重新計算 TP/SL，並用相同 order IDs 呼叫 placeOrder 修改原委託。"""
         with self.state_lock:
             if self.exit_prices_adjusted:
                 return
@@ -910,6 +967,8 @@ class ORBPaperTrader(EWrapper, EClient):
         sl_order.transmit = True
 
         try:
+            # 使用原本的 order ID 呼叫 placeOrder，代表修改既有委託，
+            # 不會再新增第二組 TP／SL。
             self.placeOrder(self.tp_order_id, self.contract, tp_order)
             self.placeOrder(self.sl_order_id, self.contract, sl_order)
             self.log(
@@ -920,6 +979,7 @@ class ORBPaperTrader(EWrapper, EClient):
             self.log(f"Could not adjust exits to fill price: {exc!r}")
 
     def _cancel_order_compat(self, order_id: Optional[int]) -> None:
+        """相容不同 ibapi 版本的 cancelOrder 簽名。新版接受 manualCancelOrderTime，舊版只接受 orderId。"""
         if order_id is None:
             return
         try:
@@ -930,6 +990,7 @@ class ORBPaperTrader(EWrapper, EClient):
             self.log(f"Could not cancel order {order_id}: {exc!r}")
 
     def _flatten_position(self, reason: str) -> None:
+        """在 15:55 或保護停損失效時取消出口單並送出市價平倉。注意取消與新市價單之間沒有等待 IB cancellation acknowledgement，文件中列為競態風險。"""
         with self.state_lock:
             if self.flatten_sent or self.cfg.dry_run:
                 return
@@ -969,6 +1030,8 @@ class ORBPaperTrader(EWrapper, EClient):
             self.flatten_order_id = flatten_id
             self.order_objects[flatten_id] = order
 
+        # 送出獨立市價單，把目前追蹤到的部位歸零。
+        # 目前不會等待 TP／SL 的取消確認，存在極短暫競態，詳見說明文件。
         self.placeOrder(flatten_id, self.contract, order)
         self.log(
             f"Submitted emergency/EOD flatten: {action} MKT {qty} "
@@ -979,6 +1042,7 @@ class ORBPaperTrader(EWrapper, EClient):
     # Time controls
     # ------------------------------------------------------------------
     def _check_time_controls(self) -> None:
+        """每秒依美東時間檢查 entry cutoff 與 flatten time。它不建立交易日曆；是否有交易日主要由行情 K 棒是否到來決定。"""
         now = datetime.now(NY)
         now_t = now.time().replace(tzinfo=None)
 
@@ -1012,6 +1076,7 @@ class ORBPaperTrader(EWrapper, EClient):
 # CLI helpers
 # ----------------------------------------------------------------------
 def parse_hhmm(value: str) -> time:
+    """解析 945、0945、09:45 等時間格式，回傳 datetime.time；非法小時或分鐘直接交由 argparse 顯示錯誤。"""
     raw = str(value).strip().replace(":", "")
     if not raw.isdigit() or len(raw) not in {3, 4}:
         raise argparse.ArgumentTypeError(
@@ -1026,6 +1091,7 @@ def parse_hhmm(value: str) -> time:
 
 
 def parse_pct(value: str) -> float:
+    """解析 SL/TP 百分比。0.015、1.5、1.5% 都代表 1.5%；小於 1 且未加 % 的值會直接當小數比例。"""
     raw = str(value).strip()
     explicit_percent = raw.endswith("%")
     if explicit_percent:
@@ -1046,6 +1112,7 @@ def parse_pct(value: str) -> float:
 
 
 def positive_float(value: str) -> float:
+    """argparse 的正數驗證器，供 --cash 使用。"""
     try:
         number = float(value)
     except ValueError as exc:
@@ -1056,6 +1123,7 @@ def positive_float(value: str) -> float:
 
 
 def nonnegative_pct(value: str) -> float:
+    """解析 cash buffer，允許 0；0.005 代表 0.5%，1 代表 1%。"""
     try:
         number = float(value)
     except ValueError as exc:
@@ -1070,6 +1138,7 @@ def nonnegative_pct(value: str) -> float:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """宣告所有 CLI 參數、預設值與說明文字，但尚不做參數之間的交叉限制。"""
     parser = argparse.ArgumentParser(
         description="IBKR paper-trading ORB bot: long breakout on closed 5-minute bars."
     )
@@ -1139,6 +1208,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def config_from_args(argv: Optional[Sequence[str]] = None) -> Config:
+    """解析 CLI 並驗證 range、cutoff、flatten 的先後順序、5 分鐘對齊以及 paper port，最後建立不可變的執行設定 Config。"""
     parser = build_parser()
     args = parser.parse_args(argv)
 
@@ -1183,6 +1253,7 @@ def config_from_args(argv: Optional[Sequence[str]] = None) -> Config:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    """程序入口：解析設定、建立 app、連線、啟動 IB network event loop 與 clock thread，等待停止條件，最後統一 shutdown 並回傳 exit code。"""
     cfg = config_from_args(argv)
     app = ORBPaperTrader(cfg)
 
@@ -1198,11 +1269,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
 
     try:
+        # 這一步只開啟 socket。IB 會非同步呼叫 nextValidId() 表示 session 就緒，
+        # 所以下方必須等待 connected_event，不能 connect 後立刻下單。
         app.connect(cfg.host, cfg.port, clientId=cfg.client_id)
     except Exception as exc:
         app.log(f"Could not connect to IB: {exc!r}")
         return 2
 
+    # EClient.run() 是阻塞式網路訊息迴圈；它必須持續執行，
+    # 才能把 socket 訊息解碼並呼叫各個 EWrapper callbacks。
     api_thread = threading.Thread(target=app.run, name="ib-api", daemon=True)
     api_thread.start()
 
@@ -1214,7 +1289,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         app.shutdown()
         return 3
 
+    # 已收到 nextValidId，現在才開始發送帳戶、持倉、合約與行情請求。
     app.start_requests()
+    # 另開 wall-clock 監控執行緒，因為無法保證 15:55 剛好有行情 callback 到達。
     clock_thread = threading.Thread(
         target=app._clock_loop, name="orb-clock", daemon=True
     )
