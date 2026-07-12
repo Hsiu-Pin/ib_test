@@ -9,23 +9,26 @@ REM    注意：第二步不會重新最佳化參數
 REM ============================================================
 
 set SYMBOL=TSLA
-set sch_st_yr=2024
-set sch_st_mn=1
+set sch_st_yr=2025
+set sch_st_mn=01
 set sch_ed_yr=2025
 set sch_ed_mn=12
 
 set vld_st_yr=2026
-set vld_st_mn=1
+set vld_st_mn=01
 set vld_ed_yr=2026
-set vld_ed_mn=6
+set vld_ed_mn=06
 
 set IB_DATA_DIR=./ib_data_tsla
 set CASH=10000
 set COMMISSION_MODEL=ibkr_fixed
 set SPREAD=0.0002
 
-set OUTTAG=v1
+set OUTTAG=v3_24for26
 
+set RUN_TRAIN=1
+
+if "%RUN_TRAIN%"=="1" (
 echo ============================================================
 echo 1. Train optimization: 2025 broad search
 echo ============================================================
@@ -36,16 +39,17 @@ python my_optimize_orb.py --symbol %SYMBOL% ^
 --cash %CASH% ^
 --commission-model %COMMISSION_MODEL% ^
 --spread %SPREAD% ^
---range-end-times 945,1000 ^
+--range-end-times 945  ^
 --sl-start-pct    0.0  ^
 --sl-end-pct      4.0  ^
---sl-step-pct     0.25 ^
+--sl-step-pct     0.2  ^
 --tp-start-pct    1.0  ^
 --tp-end-pct      6.0  ^
---tp-step-pct     0.25 ^
+--tp-step-pct     0.2  ^
 --sort-by rank_metric  ^
 --top-n 20 ^
 --output-tag %OUTTAG% 
+)
 
 if errorlevel 1 goto error
 

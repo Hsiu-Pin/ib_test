@@ -221,7 +221,14 @@ def ibkr_us_stock_fixed_commission(order_size, price):
     commission = shares * 0.005
     commission = max(commission, 1.00)
     commission = min(commission, trade_value * 0.01)
-    return commission
+    
+    # Slippage
+    #slippage_pct = 0.0005
+    slippage_pct = 0
+    slippage_cost = shares * px * slippage_pct
+    
+    return commission + slippage_cost
+
 
 
 def ibkr_us_stock_tiered_commission(order_size, price):
