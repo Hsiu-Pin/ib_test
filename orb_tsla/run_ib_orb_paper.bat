@@ -12,10 +12,10 @@ rem ---------------- Strategy settings ----------------
 rem These values can also be set by a parent BAT before calling this file.
 if not defined SYMBOL       set "SYMBOL=TSLA"
 if not defined CASH         set "CASH=10000"
-if not defined SLP          set "SLP=3.25"
-if not defined TPP          set "TPP=4.00"
+if not defined SLP          set "SLP=1.50"
+if not defined TPP          set "TPP=3.25"
 if not defined RANGE_END    set "RANGE_END=945"
-if not defined ENTRY_CUTOFF set "ENTRY_CUTOFF=1200"
+if not defined ENTRY_CUTOFF set "ENTRY_CUTOFF=1130"
 if not defined FLATTEN_TIME set "FLATTEN_TIME=1555"
 
 rem ---------------- IB connection settings ----------------

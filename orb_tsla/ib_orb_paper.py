@@ -64,6 +64,7 @@ NY = ZoneInfo("America/New_York")
 PAPER_PORTS = {7497, 4002}
 OPEN_TIME = time(9, 30)
 BAR_MINUTES = 5
+BOT_VERSION = "2026.07.13-v2"
 
 CONTRACT_REQ_ID = 1001
 MARKET_DATA_REQ_ID = 1002
@@ -76,7 +77,7 @@ BENIGN_ERROR_CODES = {
     2108,  # Market data farm connection inactive
     2158,  # Sec-def data farm connection is OK
 }
-MARKET_DATA_PERMISSION_ERRORS = {354, 10167, 10168}
+MARKET_DATA_PERMISSION_ERRORS = {354, 10089, 10167, 10168}
 
 
 @dataclass(frozen=True)
@@ -483,17 +484,35 @@ class ORBPaperTrader(EWrapper, EClient):
             self.fatal("IB returned no historical bars for the current request.")
             return
 
-        # The last keepUpToDate bar is normally the current unfinished bar.
-        for candle in bars[:-1]:
-            self._process_closed_bar(candle, historical=True)
+        today_et = datetime.now(NY).date()
+        today_bars = [bar for bar in bars if bar.start.date() == today_et]
+
+        if today_bars:
+            # The last keepUpToDate bar is normally the current unfinished bar.
+            # Reconstruct only the current ET date. Older sessions must never
+            # become today's ORB state.
+            for candle in today_bars[:-1]:
+                self._process_closed_bar(candle, historical=True)
+            current_bar = today_bars[-1]
+        else:
+            # Weekend, market holiday, or pre-market before the first RTH bar.
+            # Keep the latest bar only as a streaming cursor and wait for the
+            # next session instead of reconstructing an old day's ORB.
+            current_bar = bars[-1]
+            self.log(
+                "No regular-session bars exist for the current ET date "
+                f"({today_et.isoformat()}). Latest available session is "
+                f"{current_bar.start.date().isoformat()}; waiting for the next "
+                "09:30 ET session."
+            )
 
         with self.state_lock:
-            self.live_bar = bars[-1]
+            self.live_bar = current_bar
             self.history_ready = True
 
         self.log(
             f"Initial bar load complete: {len(bars)} bars. "
-            f"Current bar starts {bars[-1].start:%Y-%m-%d %H:%M ET}."
+            f"Streaming cursor starts {current_bar.start:%Y-%m-%d %H:%M ET}."
         )
 
     def historicalDataUpdate(self, reqId, bar) -> None:  # noqa: N802, ANN001
@@ -520,6 +539,16 @@ class ORBPaperTrader(EWrapper, EClient):
                 return
 
             if candle.start > self.live_bar.start:
+                if candle.start.date() != self.live_bar.start.date():
+                    # A new trading date has begun. Do not feed the prior
+                    # session's final cursor into the new day's strategy.
+                    self.live_bar = candle
+                    self.log(
+                        f"New market-data date detected: "
+                        f"{candle.start.date().isoformat()}; waiting for the "
+                        "first complete 5-minute bar."
+                    )
+                    return
                 closed_bar = self.live_bar
                 self.live_bar = candle
             else:
@@ -1156,6 +1185,8 @@ def config_from_args(argv: Optional[Sequence[str]] = None) -> Config:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     cfg = config_from_args(argv)
     app = ORBPaperTrader(cfg)
+
+    app.log(f"ORB bot version: {BOT_VERSION}")
 
     app.log(
         "Configuration: "
